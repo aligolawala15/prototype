@@ -1,0 +1,9 @@
+test,result
+address_reuse_detected,true
+address_only_is_ambiguous,true
+generation_separation,true
+identical_payload_identity_separation,true
+full_identity_uniqueness,true
+selective_generation_retrieval,true
+versioned_record_complete,true
+address_reuse_requires_generation,true

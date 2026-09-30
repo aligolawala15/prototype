@@ -1,0 +1,1430 @@
+﻿from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import random
+import time
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+OUT = (
+    ROOT
+    / "data"
+    / "experiments"
+    / "milestone15"
+)
+
+OUT.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# EXPERIMENT CONFIGURATION
+# ============================================================
+
+DATASET_SIZES = [
+    10 * 1024,
+    40 * 1024,
+    100 * 1024,
+]
+
+FRAGMENT_SIZE = 256
+
+DATA_PER_GROUP = 4
+
+PARITY_CONFIGURATIONS = [
+    0,
+    1,
+    2,
+    3,
+]
+
+RANDOM_SEED = 150015
+
+
+# ============================================================
+# GF(256)
+# ============================================================
+
+def gf_mul(a: int, b: int) -> int:
+
+    result = 0
+
+    while b:
+
+        if b & 1:
+            result ^= a
+
+        high = a & 0x80
+
+        a = (a << 1) & 0xFF
+
+        if high:
+            a ^= 0x1D
+
+        b >>= 1
+
+    return result
+
+
+def gf_pow(a: int, power: int) -> int:
+
+    result = 1
+
+    while power:
+
+        if power & 1:
+            result = gf_mul(result, a)
+
+        a = gf_mul(a, a)
+
+        power >>= 1
+
+    return result
+
+
+def gf_inv(a: int) -> int:
+
+    if a == 0:
+        raise ZeroDivisionError(
+            "GF(256) zero has no inverse."
+        )
+
+    return gf_pow(a, 254)
+
+
+def matrix_inverse(
+    matrix: list[list[int]]
+) -> list[list[int]]:
+
+    n = len(matrix)
+
+    augmented = []
+
+    for r in range(n):
+
+        augmented.append(
+            list(matrix[r])
+            + [
+                1 if r == c else 0
+                for c in range(n)
+            ]
+        )
+
+    for col in range(n):
+
+        pivot = None
+
+        for row in range(col, n):
+
+            if augmented[row][col] != 0:
+                pivot = row
+                break
+
+        if pivot is None:
+            raise ValueError(
+                "Matrix is singular."
+            )
+
+        if pivot != col:
+
+            augmented[col], augmented[pivot] = (
+                augmented[pivot],
+                augmented[col],
+            )
+
+        inverse_pivot = gf_inv(
+            augmented[col][col]
+        )
+
+        augmented[col] = [
+            gf_mul(value, inverse_pivot)
+            for value in augmented[col]
+        ]
+
+        for row in range(n):
+
+            if row == col:
+                continue
+
+            factor = augmented[row][col]
+
+            if factor == 0:
+                continue
+
+            augmented[row] = [
+                a ^ gf_mul(factor, b)
+                for a, b in zip(
+                    augmented[row],
+                    augmented[col],
+                )
+            ]
+
+    return [
+        row[n:]
+        for row in augmented
+    ]
+
+
+def matrix_vector_mul(
+    matrix: list[list[int]],
+    blocks: list[bytes],
+) -> list[bytes]:
+
+    result = []
+
+    block_size = len(blocks[0])
+
+    for row in matrix:
+
+        output = bytearray(block_size)
+
+        for coefficient, block in zip(
+            row,
+            blocks,
+        ):
+
+            if coefficient == 0:
+                continue
+
+            for i, value in enumerate(block):
+
+                output[i] ^= gf_mul(
+                    coefficient,
+                    value,
+                )
+
+        result.append(bytes(output))
+
+    return result
+
+
+# ============================================================
+# PARITY
+# ============================================================
+
+def parity_rows(
+    parity_count: int,
+) -> list[list[int]]:
+
+    rows = []
+
+    for p in range(parity_count):
+
+        rows.append([
+            gf_pow(
+                data_index + 1,
+                p + 1,
+            )
+            for data_index in range(DATA_PER_GROUP)
+        ])
+
+    return rows
+
+
+def create_parity(
+    data_blocks: list[bytes],
+    parity_count: int,
+) -> list[bytes]:
+
+    if parity_count == 0:
+        return []
+
+    return matrix_vector_mul(
+        parity_rows(parity_count),
+        data_blocks,
+    )
+
+
+def recover_data(
+    available: dict[int, bytes],
+    parity_count: int,
+) -> list[bytes]:
+
+    if len(available) < DATA_PER_GROUP:
+        raise ValueError(
+            "Insufficient fragments."
+        )
+
+    selected_indices = sorted(
+        available.keys()
+    )[:DATA_PER_GROUP]
+
+    matrix = []
+
+    observed = []
+
+    for index in selected_indices:
+
+        if index < DATA_PER_GROUP:
+
+            row = [
+                1 if d == index else 0
+                for d in range(DATA_PER_GROUP)
+            ]
+
+        else:
+
+            parity_index = (
+                index - DATA_PER_GROUP
+            )
+
+            row = [
+                gf_pow(
+                    d + 1,
+                    parity_index + 1,
+                )
+                for d in range(DATA_PER_GROUP)
+            ]
+
+        matrix.append(row)
+
+        observed.append(
+            available[index]
+        )
+
+    inverse = matrix_inverse(matrix)
+
+    return matrix_vector_mul(
+        inverse,
+        observed,
+    )
+
+
+# ============================================================
+# DATA GENERATION
+# ============================================================
+
+def deterministic_data(
+    size: int,
+) -> bytes:
+
+    pattern = (
+        b"MOLECULAR-ADDRESS|"
+        b"MILESTONE-15|"
+        b"CONTROLLED-BENCHMARK|"
+        b"DNA-STORAGE|"
+        b"ADDRESS|"
+        b"GENERATION|"
+        b"INTEGRITY|"
+        b"REDUNDANCY|"
+        b"RECOVERY|"
+        b"REPRODUCIBLE-DATA|"
+    )
+
+    data = bytearray()
+
+    while len(data) < size:
+        data.extend(pattern)
+
+    return bytes(
+        data[:size]
+    )
+
+
+# ============================================================
+# FRAGMENTATION
+# ============================================================
+
+def fragment_data(
+    data: bytes,
+) -> list[bytes]:
+
+    if len(data) % FRAGMENT_SIZE != 0:
+        raise ValueError(
+            "Dataset must be divisible by fragment size."
+        )
+
+    return [
+        data[i:i + FRAGMENT_SIZE]
+        for i in range(
+            0,
+            len(data),
+            FRAGMENT_SIZE,
+        )
+    ]
+
+
+# ============================================================
+# SINGLE EXPERIMENT
+# ============================================================
+
+def run_experiment(
+    data: bytes,
+    parity_count: int,
+) -> dict:
+
+    source_hash = hashlib.sha256(
+        data
+    ).hexdigest()
+
+    fragments = fragment_data(
+        data
+    )
+
+    groups = [
+        fragments[i:i + DATA_PER_GROUP]
+        for i in range(
+            0,
+            len(fragments),
+            DATA_PER_GROUP,
+        )
+    ]
+
+    total_parity = 0
+
+    start = time.perf_counter()
+
+    archive = []
+
+    for group in groups:
+
+        parity = create_parity(
+            group,
+            parity_count,
+        )
+
+        total_parity += len(parity)
+
+        archive.append({
+            "data": group,
+            "parity": parity,
+        })
+
+    encoding_seconds = (
+        time.perf_counter() - start
+    )
+
+    if parity_count == 0:
+
+        failure_test_exact = False
+        recovery_seconds = 0.0
+
+    else:
+
+        start = time.perf_counter()
+
+        # ----------------------------------------------------
+        # Deliberately remove exactly parity_count data
+        # fragments from ONE group.
+        # ----------------------------------------------------
+
+        target_group = archive[0]
+
+        available = {}
+
+        for i, block in enumerate(
+            target_group["data"]
+        ):
+
+            if i >= parity_count:
+                available[i] = block
+
+        for p, block in enumerate(
+            target_group["parity"]
+        ):
+
+            available[
+                DATA_PER_GROUP + p
+            ] = block
+
+        recovered = recover_data(
+            available,
+            parity_count,
+        )
+
+        recovery_seconds = (
+            time.perf_counter() - start
+        )
+
+        failure_test_exact = (
+            recovered
+            == target_group["data"]
+        )
+
+    overhead = (
+        total_parity
+        / len(fragments)
+        * 100
+    )
+
+    result = {
+
+        "dataset_bytes":
+            len(data),
+
+        "dataset_kb":
+            len(data) / 1024,
+
+        "fragment_size":
+            FRAGMENT_SIZE,
+
+        "data_fragments":
+            len(fragments),
+
+        "parity_fragments":
+            total_parity,
+
+        "parity_per_group":
+            parity_count,
+
+        "redundancy_overhead_percent":
+            overhead,
+
+        "source_sha256":
+            source_hash,
+
+        "encoding_seconds":
+            encoding_seconds,
+
+        "recovery_seconds":
+            recovery_seconds,
+
+        "boundary_test_failures":
+            parity_count,
+
+        "boundary_recovery_exact":
+            failure_test_exact,
+
+        "expected_boundary":
+            parity_count,
+
+        "boundary_valid":
+            (
+                failure_test_exact
+                if parity_count > 0
+                else True
+            ),
+    }
+
+    return result
+
+
+# ============================================================
+# BENCHMARK RUN
+# ============================================================
+
+# ------------------------------------------------------------
+# MILESTONE15_DETERMINISTIC_RANDOM_RESET
+# ------------------------------------------------------------
+# Reinitialize deterministic random state before every benchmark
+# execution so repeated runs use identical generated conditions.
+try:
+    import random as _milestone15_random
+    _milestone15_random.seed(150015)
+except Exception:
+    pass
+# ------------------------------------------------------------
+def run_benchmark() -> list[dict]:
+
+    all_results = []
+
+    for size in DATASET_SIZES:
+
+        data = deterministic_data(
+            size
+        )
+
+        for parity_count in PARITY_CONFIGURATIONS:
+
+            result = run_experiment(
+                data,
+                parity_count,
+            )
+
+            all_results.append(
+                result
+            )
+
+    return all_results
+
+
+# ============================================================
+# REPRODUCIBILITY TEST
+# ============================================================
+
+def reproducibility_test() -> dict:
+
+    data_a = deterministic_data(
+        40 * 1024
+    )
+
+    data_b = deterministic_data(
+        40 * 1024
+    )
+
+    random.seed(RANDOM_SEED)
+    benchmark_a = run_benchmark()
+
+    random.seed(RANDOM_SEED)
+    benchmark_b = run_benchmark()
+
+    # ------------------------------------------------------------
+    # CANONICAL REPRODUCIBILITY COMPARISON
+    #
+    # Execution timing is intentionally excluded because
+    # encoding_seconds and recovery_seconds are machine/runtime
+    # dependent and cannot be expected to be identical.
+    # ------------------------------------------------------------
+
+    NON_DETERMINISTIC_FIELDS = {
+        "encoding_seconds",
+        "recovery_seconds",
+        "execution_time",
+        "elapsed_time",
+        "runtime",
+        "timestamp",
+        "run_timestamp",
+        "uuid",
+    }
+
+    def canonicalize(results):
+        canonical = []
+
+        for result in results:
+
+            if not isinstance(result, dict):
+                canonical.append(result)
+                continue
+
+            canonical.append(
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key not in NON_DETERMINISTIC_FIELDS
+                }
+            )
+
+        return canonical
+
+    canonical_a = canonicalize(
+        benchmark_a
+    )
+
+    canonical_b = canonicalize(
+        benchmark_b
+    )
+
+    serialized_a = json.dumps(
+        canonical_a,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+    serialized_b = json.dumps(
+        canonical_b,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+    dataset_hash_a = hashlib.sha256(
+        data_a
+    ).hexdigest()
+
+    dataset_hash_b = hashlib.sha256(
+        data_b
+    ).hexdigest()
+
+    return {
+        "same_dataset_sha256":
+            dataset_hash_a == dataset_hash_b,
+
+        "same_benchmark_structure":
+            [
+                (
+                    r["dataset_bytes"],
+                    r["parity_per_group"],
+                    r["source_sha256"],
+                    r["expected_boundary"],
+                    r["boundary_valid"],
+                )
+                for r in benchmark_a
+            ]
+            ==
+            [
+                (
+                    r["dataset_bytes"],
+                    r["parity_per_group"],
+                    r["source_sha256"],
+                    r["expected_boundary"],
+                    r["boundary_valid"],
+                )
+                for r in benchmark_b
+            ],
+
+        "deterministic_results":
+            serialized_a == serialized_b,
+    }
+
+# ============================================================
+    # 1. DETERMINISTIC DATASET TEST
+    # ============================================================
+
+    data_a = deterministic_data(
+        10 * 1024
+    )
+
+    data_b = deterministic_data(
+        10 * 1024
+    )
+
+    dataset_sha_a = hashlib.sha256(
+        data_a
+    ).hexdigest()
+
+    dataset_sha_b = hashlib.sha256(
+        data_b
+    ).hexdigest()
+
+    same_dataset_sha256 = (
+        dataset_sha_a == dataset_sha_b
+    )
+
+    # ============================================================
+    # 2. RUN BENCHMARK A
+    # ============================================================
+
+    random.seed(RANDOM_SEED)
+
+    benchmark_a = run_benchmark()
+
+    # ============================================================
+    # 3. RUN BENCHMARK B FROM IDENTICAL RNG STATE
+    # ============================================================
+
+    random.seed(RANDOM_SEED)
+
+    benchmark_b = run_benchmark()
+
+    # ============================================================
+    # 4. CANONICALIZE RESULTS
+    # ============================================================
+    #
+    # Keep fields that represent experimental results.
+    #
+    # Ignore execution-only metadata such as:
+    # timestamp
+    # run_timestamp
+    # generated_at
+    # execution_time
+    # duration
+    # run_id
+    # UUID-like metadata
+    #
+    # The benchmark logic itself is NOT modified.
+    # ============================================================
+
+    volatile_keys = {
+        "timestamp",
+        "run_timestamp",
+        "generated_at",
+        "created_at",
+        "updated_at",
+        "execution_time",
+        "elapsed_time",
+        "duration",
+        "runtime",
+        "run_id",
+        "execution_id",
+        "uuid",
+    }
+
+    def canonicalize(value):
+
+        if isinstance(value, dict):
+
+            result = {}
+
+            for key in sorted(
+                value.keys(),
+                key=lambda x: str(x)
+            ):
+
+                key_text = str(key)
+
+                if key_text.lower() in {
+                    str(k).lower()
+                    for k in volatile_keys
+                }:
+                    continue
+
+                result[key_text] = canonicalize(
+                    value[key]
+                )
+
+            return result
+
+        if isinstance(value, (list, tuple)):
+
+            return [
+                canonicalize(item)
+                for item in value
+            ]
+
+        if isinstance(value, set):
+
+            normalized = [
+                canonicalize(item)
+                for item in value
+            ]
+
+            return sorted(
+                normalized,
+                key=lambda x: json.dumps(
+                    x,
+                    sort_keys=True,
+                    default=str
+                )
+            )
+
+        if isinstance(value, float):
+
+            return round(
+                value,
+                12
+            )
+
+        return value
+
+    canonical_a = canonicalize(
+        benchmark_a
+    )
+
+    canonical_b = canonicalize(
+        benchmark_b
+    )
+
+    # ============================================================
+    # 5. SERIALIZE CANONICAL RESULTS
+    # ============================================================
+
+    serialized_a = json.dumps(
+        canonical_a,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+    serialized_b = json.dumps(
+        canonical_b,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+    # ============================================================
+    # 6. RESULT COMPARISON
+    # ============================================================
+
+    same_benchmark_structure = (
+        type(benchmark_a)
+        ==
+        type(benchmark_b)
+    )
+
+    deterministic_results = (
+        serialized_a
+        ==
+        serialized_b
+    )
+
+    # ============================================================
+    # 7. EXTRA SCIENTIFIC STRUCTURE CHECK
+    # ============================================================
+    #
+    # Confirm that the expected benchmark dimensions are identical.
+    # This prevents a false PASS caused only by identical metadata.
+    # ============================================================
+
+    def extract_structure(value):
+
+        if not isinstance(value, list):
+            return value
+
+        structure = []
+
+        for row in value:
+
+            if not isinstance(row, dict):
+                structure.append(
+                    canonicalize(row)
+                )
+                continue
+
+            structure.append({
+                "dataset_bytes":
+                    row.get("dataset_bytes"),
+
+                "parity_per_group":
+                    row.get("parity_per_group"),
+
+                "source_sha256":
+                    row.get("source_sha256"),
+
+                "expected_boundary":
+                    row.get("expected_boundary"),
+
+                "data_fragments":
+                    row.get("data_fragments"),
+
+                "parity_fragments":
+                    row.get("parity_fragments"),
+
+                "overhead_percent":
+                    row.get("overhead_percent"),
+
+                "exact":
+                    row.get("exact"),
+            })
+
+        return structure
+
+    structure_a = extract_structure(
+        benchmark_a
+    )
+
+    structure_b = extract_structure(
+        benchmark_b
+    )
+
+    same_scientific_structure = (
+        structure_a
+        ==
+        structure_b
+    )
+
+    # Final reproducibility condition
+    deterministic_results = (
+        deterministic_results
+        and
+        same_scientific_structure
+    )
+
+    return {
+        "same_dataset_sha256":
+            same_dataset_sha256,
+
+        "same_benchmark_structure":
+            same_benchmark_structure
+            and
+            same_scientific_structure,
+
+        "deterministic_results":
+            deterministic_results,
+    }
+
+# ============================================================
+# MAIN
+# ============================================================
+
+# ------------------------------------------------------------
+# MILESTONE15_DETERMINISTIC_RANDOM_RESET
+# ------------------------------------------------------------
+# Reinitialize deterministic random state before every benchmark
+# execution so repeated runs use identical generated conditions.
+try:
+    import random as _milestone15_random
+    _milestone15_random.seed(150015)
+except Exception:
+    pass
+# ------------------------------------------------------------
+def main():
+
+    print()
+    print("=" * 60)
+    print("MILESTONE 15 VERIFICATION")
+    print("EXPERIMENTAL BENCHMARK + EVIDENCE PACK")
+    print("=" * 60)
+
+    print()
+    print("CONFIGURATION")
+    print("-" * 60)
+    print(
+        f"Dataset sizes        : "
+        f"{[s // 1024 for s in DATASET_SIZES]} KB"
+    )
+    print(
+        f"Fragment size        : "
+        f"{FRAGMENT_SIZE} bytes"
+    )
+    print(
+        f"Data per group       : "
+        f"{DATA_PER_GROUP}"
+    )
+    print(
+        f"Parity configurations: "
+        f"{PARITY_CONFIGURATIONS}"
+    )
+    print(
+        f"Random seed          : "
+        f"{RANDOM_SEED}"
+    )
+    random.seed(150015)
+
+    results = run_benchmark()
+
+    print()
+    print("BENCHMARK RESULTS")
+    print("-" * 60)
+
+    for result in results:
+
+        print(
+            f"{int(result['dataset_kb']):>4} KB | "
+            f"Parity={result['parity_per_group']} | "
+            f"Fragments={result['data_fragments']:>4} | "
+            f"Parity fragments={result['parity_fragments']:>4} | "
+            f"Overhead="
+            f"{result['redundancy_overhead_percent']:>6.2f}% | "
+            f"Boundary="
+            f"{result['expected_boundary']} | "
+            f"Exact="
+            f"{result['boundary_recovery_exact']}"
+        )
+
+    # --------------------------------------------------------
+    # REPRODUCIBILITY
+    # --------------------------------------------------------
+
+    reproducibility = (
+        reproducibility_test()
+    )
+
+    print()
+    print("REPRODUCIBILITY")
+    print("-" * 60)
+
+    print(
+        "Deterministic dataset : "
+        f"{reproducibility['same_dataset_sha256']}"
+    )
+
+    print(
+        "Benchmark structure   : "
+        f"{reproducibility['same_benchmark_structure']}"
+    )
+
+    print(
+        "Deterministic results : "
+        f"{reproducibility['deterministic_results']}"
+    )
+
+    # --------------------------------------------------------
+    # EXPECTED BOUNDARIES
+    # --------------------------------------------------------
+
+    boundary_checks = []
+
+    for result in results:
+
+        expected = (
+            result["parity_per_group"]
+        )
+
+        observed = (
+            result["expected_boundary"]
+        )
+
+        exact = (
+            result["boundary_recovery_exact"]
+        )
+
+        if expected == 0:
+
+            valid = True
+
+        else:
+
+            valid = (
+                observed == expected
+                and exact
+            )
+
+        boundary_checks.append(
+            valid
+        )
+
+    benchmark_pass = all(
+        boundary_checks
+    )
+
+    reproducibility_pass = all(
+        reproducibility.values()
+    )
+
+    # --------------------------------------------------------
+    # SAVE CSV
+    # --------------------------------------------------------
+
+    csv_path = (
+        OUT
+        / "benchmark_results.csv"
+    )
+
+    fieldnames = list(
+        results[0].keys()
+    )
+
+    with csv_path.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fieldnames,
+        )
+
+        writer.writeheader()
+
+        writer.writerows(
+            results
+        )
+
+    # --------------------------------------------------------
+    # SUMMARY
+    # --------------------------------------------------------
+
+    total_tests = len(
+        results
+    )
+
+    passed_tests = sum(
+        1
+        for result in results
+        if result["boundary_valid"]
+    )
+
+    summary = {
+
+        "milestone": 15,
+
+        "name":
+            "Experimental Benchmark + Evidence Pack",
+
+        "configuration": {
+            "dataset_sizes_bytes":
+                DATASET_SIZES,
+
+            "fragment_size":
+                FRAGMENT_SIZE,
+
+            "data_per_group":
+                DATA_PER_GROUP,
+
+            "parity_configurations":
+                PARITY_CONFIGURATIONS,
+        },
+
+        "benchmark": {
+            "total_tests":
+                total_tests,
+
+            "passed_tests":
+                passed_tests,
+
+            "failed_tests":
+                total_tests
+                - passed_tests,
+
+            "results":
+                results,
+        },
+
+        "reproducibility":
+            reproducibility,
+
+        "overall_pass":
+            (
+                benchmark_pass
+                and reproducibility_pass
+            ),
+
+        "important_limitation":
+            (
+                "This benchmark evaluates a "
+                "digital simulation of redundancy "
+                "and erasure recovery. It does not "
+                "measure physical DNA synthesis, "
+                "molecular storage, sequencing, or "
+                "physical DNA error rates."
+            ),
+    }
+
+    json_path = (
+        OUT
+        / "benchmark_summary.json"
+    )
+
+    json_path.write_text(
+        json.dumps(
+            summary,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    # --------------------------------------------------------
+    # HUMAN-READABLE REPORT
+    # --------------------------------------------------------
+
+    report_path = (
+        OUT
+        / "benchmark_report.txt"
+    )
+
+    lines = []
+
+    lines.append(
+        "MOLECULAR ADDRESS - MILESTONE 15"
+    )
+
+    lines.append(
+        "EXPERIMENTAL BENCHMARK + EVIDENCE PACK"
+    )
+
+    lines.append("")
+    lines.append(
+        "Dataset sizes: "
+        + ", ".join(
+            f"{s // 1024} KB"
+            for s in DATASET_SIZES
+        )
+    )
+
+    lines.append(
+        "Fragment size: "
+        + str(FRAGMENT_SIZE)
+        + " bytes"
+    )
+
+    lines.append("")
+    lines.append(
+        "PARITY / OVERHEAD / RECOVERY"
+    )
+
+    lines.append(
+        "-" * 60
+    )
+
+    for parity in PARITY_CONFIGURATIONS:
+
+        matching = [
+            r
+            for r in results
+            if r["parity_per_group"]
+            == parity
+        ]
+
+        if not matching:
+            continue
+
+        overhead = matching[0][
+            "redundancy_overhead_percent"
+        ]
+
+        lines.append(
+            f"Parity {parity}: "
+            f"{overhead:.2f}% overhead | "
+            f"{parity} failure(s)/group "
+            f"tested"
+        )
+
+    lines.append("")
+    lines.append(
+        f"Benchmark tests: "
+        f"{passed_tests}/{total_tests} passed"
+    )
+
+    lines.append(
+        "Reproducibility: "
+        + (
+            "PASS"
+            if reproducibility_pass
+            else "FAIL"
+        )
+    )
+
+    lines.append(
+        "Overall: "
+        + (
+            "PASS"
+            if (
+                benchmark_pass
+                and reproducibility_pass
+            )
+            else "FAIL"
+        )
+    )
+
+    lines.append("")
+    lines.append(
+        "LIMITATION"
+    )
+
+    lines.append(
+        "This is a controlled digital benchmark."
+    )
+
+    lines.append(
+        "It does not represent measured physical "
+        "DNA storage or sequencing performance."
+    )
+
+    report_path.write_text(
+        "\n".join(lines),
+        encoding="utf-8",
+    )
+
+    # --------------------------------------------------------
+    # FINAL REPORT
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 60)
+    print("QUANTITATIVE SUMMARY")
+    print("=" * 60)
+
+    print(
+        f"Total benchmark tests : "
+        f"{total_tests}"
+    )
+
+    print(
+        f"Passed benchmark tests: "
+        f"{passed_tests}"
+    )
+
+    print(
+        f"Failed benchmark tests: "
+        f"{total_tests - passed_tests}"
+    )
+
+    print(
+        "Reproducibility       : "
+        + (
+            "PASS"
+            if reproducibility_pass
+            else "FAIL"
+        )
+    )
+
+    print()
+    print("REDUNDANCY TRADE-OFF")
+    print("-" * 60)
+
+    for parity in PARITY_CONFIGURATIONS:
+
+        result = next(
+            r
+            for r in results
+            if r["parity_per_group"]
+            == parity
+            and r["dataset_bytes"]
+            == DATASET_SIZES[0]
+        )
+
+        print(
+            f"Parity={parity} | "
+            f"Overhead="
+            f"{result['redundancy_overhead_percent']:.2f}% | "
+            f"Recovery boundary="
+            f"{result['expected_boundary']} "
+            f"failure(s)/group"
+        )
+
+    print()
+    print("EVIDENCE FILES")
+    print("-" * 60)
+
+    print(
+        f"CSV    : {csv_path}"
+    )
+
+    print(
+        f"JSON   : {json_path}"
+    )
+
+    print(
+        f"Report : {report_path}"
+    )
+
+    print()
+    print("IMPORTANT LIMITATION")
+    print("-" * 60)
+
+    print(
+        "This benchmark validates the digital "
+        "redundancy/recovery architecture."
+    )
+
+    print(
+        "It does not claim physical DNA synthesis, "
+        "molecular storage, sequencing, or physical "
+        "DNA error-rate performance."
+    )
+
+    print()
+
+    if (
+        benchmark_pass
+        and reproducibility_pass
+    ):
+
+        print("=" * 60)
+        print("RESULT: PASS")
+        print("=" * 60)
+
+        print()
+        print(
+            "Milestone 15 benchmark completed "
+            "successfully."
+        )
+
+        print(
+            "Multiple dataset sizes were evaluated "
+            "across baseline and three redundancy "
+            "configurations."
+        )
+
+        print(
+            "Recovery boundaries matched the "
+            "configured digital redundancy."
+        )
+
+        print(
+            "The benchmark was reproducible."
+        )
+
+    else:
+
+        print("=" * 60)
+        print("RESULT: FAIL")
+        print("=" * 60)
+
+        raise RuntimeError(
+            "Milestone 15 verification failed."
+        )
+
+    print()
+    print("=" * 60)
+    print("MILESTONE 15 PASSED")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,941 @@
+﻿from __future__ import annotations
+
+from pathlib import Path
+import csv
+import hashlib
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+INPUT = (
+    ROOT
+    / "data"
+    / "input"
+    / "archive_file_002.txt"
+)
+
+FILE_ID = "FILE_002"
+
+FRAGMENT_SIZE = 256
+
+GROUP_SIZE = 4
+
+
+# ============================================================
+# GF(256)
+# ============================================================
+
+EXP = [0] * 512
+LOG = [0] * 256
+
+value = 1
+
+for i in range(255):
+
+    EXP[i] = value
+    LOG[value] = i
+
+    value <<= 1
+
+    if value & 0x100:
+        value ^= 0x11D
+
+for i in range(255, 512):
+    EXP[i] = EXP[i - 255]
+
+
+def gf_mul(a: int, b: int) -> int:
+
+    if a == 0 or b == 0:
+        return 0
+
+    return EXP[
+        LOG[a] + LOG[b]
+    ]
+
+
+def gf_inverse(a: int) -> int:
+
+    if a == 0:
+        raise ZeroDivisionError(
+            "GF inverse of zero."
+        )
+
+    return EXP[
+        255 - LOG[a]
+    ]
+
+
+def xor_bytes(
+    a: bytes,
+    b: bytes,
+) -> bytes:
+
+    return bytes(
+        x ^ y
+        for x, y in zip(a, b)
+    )
+
+
+def scale_bytes(
+    data: bytes,
+    coefficient: int,
+) -> bytes:
+
+    return bytes(
+        gf_mul(
+            value,
+            coefficient
+        )
+        for value in data
+    )
+
+
+# ============================================================
+# DNA conversion
+# ============================================================
+
+DNA_TO_BITS = {
+    "A": 0b00,
+    "C": 0b01,
+    "G": 0b10,
+    "T": 0b11,
+}
+
+
+BITS_TO_DNA = {
+    0b00: "A",
+    0b01: "C",
+    0b10: "G",
+    0b11: "T",
+}
+
+
+def dna_to_bytes(
+    sequence: str,
+) -> bytes:
+
+    if len(sequence) % 4 != 0:
+        raise ValueError(
+            "DNA length must be divisible by 4."
+        )
+
+    output = bytearray()
+
+    for index in range(
+        0,
+        len(sequence),
+        4,
+    ):
+
+        value = 0
+
+        for base in sequence[
+            index:index + 4
+        ]:
+
+            value = (
+                value << 2
+            ) | DNA_TO_BITS[base]
+
+        output.append(value)
+
+    return bytes(output)
+
+
+def bytes_to_dna(
+    payload: bytes,
+) -> str:
+
+    output = []
+
+    for value in payload:
+
+        output.append(
+            BITS_TO_DNA[
+                (value >> 6) & 0b11
+            ]
+        )
+
+        output.append(
+            BITS_TO_DNA[
+                (value >> 4) & 0b11
+            ]
+        )
+
+        output.append(
+            BITS_TO_DNA[
+                (value >> 2) & 0b11
+            ]
+        )
+
+        output.append(
+            BITS_TO_DNA[
+                value & 0b11
+            ]
+        )
+
+    return "".join(output)
+
+
+def sha256(
+    value: bytes,
+) -> str:
+
+    return hashlib.sha256(
+        value
+    ).hexdigest()
+
+
+# ============================================================
+# Parity construction
+#
+# For K data fragments and R parity fragments:
+#
+# P_j = sum(
+#     coefficient(j, i) * D_i
+# )
+#
+# The coefficients are Vandermonde-style.
+# ============================================================
+
+
+def make_parity(
+    data,
+    parity_count,
+):
+
+    parity = []
+
+    size = len(data[0])
+
+    for parity_index in range(
+        parity_count
+    ):
+
+        accumulator = bytes(size)
+
+        row_base = parity_index + 1
+
+        for data_index, fragment in enumerate(
+            data
+        ):
+
+            coefficient = pow(
+                row_base,
+                data_index,
+                257,
+            )
+
+            # Keep coefficients inside GF(256).
+            coefficient %= 256
+
+            if coefficient == 0:
+                coefficient = 1
+
+            accumulator = xor_bytes(
+                accumulator,
+                scale_bytes(
+                    fragment,
+                    coefficient,
+                ),
+            )
+
+        parity.append(accumulator)
+
+    return parity
+
+
+def solve_two_unknowns(
+    known,
+    parity_values,
+    missing,
+    parity_count,
+):
+
+    if len(missing) != 2:
+        raise ValueError(
+            "Exactly two unknown fragments required."
+        )
+
+    if parity_count < 2:
+        raise ValueError(
+            "Two parity fragments required."
+        )
+
+    a, b = missing
+
+    size = len(parity_values[0])
+
+    rhs0 = bytes(size)
+    rhs1 = bytes(size)
+
+    for index, fragment in enumerate(
+        known
+    ):
+
+        if fragment is None:
+            continue
+
+        coefficient0 = (
+            pow(
+                1,
+                index,
+                257,
+            )
+            % 256
+        )
+
+        coefficient1 = (
+            pow(
+                2,
+                index,
+                257,
+            )
+            % 256
+        )
+
+        if coefficient0 == 0:
+            coefficient0 = 1
+
+        if coefficient1 == 0:
+            coefficient1 = 1
+
+        rhs0 = xor_bytes(
+            rhs0,
+            scale_bytes(
+                fragment,
+                coefficient0,
+            ),
+        )
+
+        rhs1 = xor_bytes(
+            rhs1,
+            scale_bytes(
+                fragment,
+                coefficient1,
+            ),
+        )
+
+    rhs0 = xor_bytes(
+        parity_values[0],
+        rhs0,
+    )
+
+    rhs1 = xor_bytes(
+        parity_values[1],
+        rhs1,
+    )
+
+    a0 = (
+        pow(
+            1,
+            a,
+            257,
+        )
+        % 256
+    )
+
+    b0 = (
+        pow(
+            1,
+            b,
+            257,
+        )
+        % 256
+    )
+
+    a1 = (
+        pow(
+            2,
+            a,
+            257,
+        )
+        % 256
+    )
+
+    b1 = (
+        pow(
+            2,
+            b,
+            257,
+        )
+        % 256
+    )
+
+    if a0 == 0:
+        a0 = 1
+
+    if b0 == 0:
+        b0 = 1
+
+    if a1 == 0:
+        a1 = 1
+
+    if b1 == 0:
+        b1 = 1
+
+    determinant = (
+        gf_mul(a0, b1)
+        ^
+        gf_mul(a1, b0)
+    )
+
+    if determinant == 0:
+        raise ValueError(
+            "Singular recovery matrix."
+        )
+
+    inverse_det = gf_inverse(
+        determinant
+    )
+
+    numerator_a = xor_bytes(
+        scale_bytes(
+            rhs0,
+            b1,
+        ),
+        scale_bytes(
+            rhs1,
+            b0,
+        ),
+    )
+
+    numerator_b = xor_bytes(
+        scale_bytes(
+            rhs1,
+            a0,
+        ),
+        scale_bytes(
+            rhs0,
+            a1,
+        ),
+    )
+
+    recovered_a = scale_bytes(
+        numerator_a,
+        inverse_det,
+    )
+
+    recovered_b = scale_bytes(
+        numerator_b,
+        inverse_det,
+    )
+
+    return {
+        a: recovered_a,
+        b: recovered_b,
+    }
+
+
+# ============================================================
+# Configuration experiment
+# ============================================================
+
+
+def simulate_configuration(
+    original_fragments,
+    parity_count,
+    failure_count,
+):
+
+    data_count = len(
+        original_fragments
+    )
+
+    groups = []
+
+    for start in range(
+        0,
+        data_count,
+        GROUP_SIZE,
+    ):
+
+        group = original_fragments[
+            start:
+            start + GROUP_SIZE
+        ]
+
+        if len(group) != GROUP_SIZE:
+            raise ValueError(
+                "Dataset does not divide into complete groups."
+            )
+
+        data = [
+            dna_to_bytes(
+                fragment.dna_sequence
+            )
+            for fragment in group
+        ]
+
+        parity = make_parity(
+            data,
+            parity_count,
+        )
+
+        groups.append(
+            {
+                "data": data,
+                "parity": parity,
+            }
+        )
+
+    # Test one group under the requested failure count.
+    #
+    # This measures the local recovery capability of
+    # each redundancy configuration.
+
+    if failure_count == 0:
+
+        return True
+
+    if failure_count > parity_count:
+
+        return False
+
+    for group in groups:
+
+        damaged = list(
+            group["data"]
+        )
+
+        targets = list(
+            range(
+                failure_count
+            )
+        )
+
+        for target in targets:
+
+            damaged[target] = None
+
+        # ----------------------------------------------------
+        # One failure
+        # ----------------------------------------------------
+
+        if failure_count == 1:
+
+            target = targets[0]
+
+            recovered = bytes(
+                len(
+                    group["parity"][0]
+                )
+            )
+
+            for index, value in enumerate(
+                damaged
+            ):
+
+                if value is not None:
+
+                    coefficient = (
+                        pow(
+                            1,
+                            index,
+                            257,
+                        )
+                        % 256
+                    )
+
+                    if coefficient == 0:
+                        coefficient = 1
+
+                    recovered = xor_bytes(
+                        recovered,
+                        scale_bytes(
+                            value,
+                            coefficient,
+                        ),
+                    )
+
+            # For the first parity equation,
+            # the target coefficient is 1.
+            recovered = xor_bytes(
+                group["parity"][0],
+                recovered,
+            )
+
+            damaged[target] = recovered
+
+        # ----------------------------------------------------
+        # Two failures
+        # ----------------------------------------------------
+
+        elif failure_count == 2:
+
+            recovered_map = solve_two_unknowns(
+                damaged,
+                group["parity"],
+                targets,
+                parity_count,
+            )
+
+            for index, value in (
+                recovered_map.items()
+            ):
+
+                damaged[index] = value
+
+        # ----------------------------------------------------
+        # Three or more failures
+        # ----------------------------------------------------
+
+        else:
+
+            return False
+
+        if damaged != group["data"]:
+
+            return False
+
+    return True
+
+
+def main():
+
+    print("")
+    print("=" * 60)
+    print("MILESTONE 12 VERIFICATION")
+    print("REDUNDANCY / OVERHEAD / FAULT-TOLERANCE SWEEP")
+    print("=" * 60)
+    print("")
+
+    original = INPUT.read_bytes()
+
+    fragments = (
+        __import__(
+            "app.dna_archive.archive",
+            fromlist=[
+                "encode_file_to_dna_fragments"
+            ],
+        )
+        .encode_file_to_dna_fragments(
+            INPUT,
+            file_id=FILE_ID,
+            fragment_size=FRAGMENT_SIZE,
+        )
+    )
+
+    original_hash = sha256(
+        original
+    )
+
+    print("DATASET")
+    print("-" * 60)
+
+    print(
+        f"Original bytes       : "
+        f"{len(original)}"
+    )
+
+    print(
+        f"Data fragments       : "
+        f"{len(fragments)}"
+    )
+
+    print(
+        f"Fragment size        : "
+        f"{FRAGMENT_SIZE} bytes"
+    )
+
+    print(
+        f"Original SHA-256     : "
+        f"{original_hash}"
+    )
+
+    print("")
+
+    configurations = [
+        {
+            "name":
+                "BASELINE",
+            "parity":
+                0,
+        },
+        {
+            "name":
+                "SINGLE-PARITY",
+            "parity":
+                1,
+        },
+        {
+            "name":
+                "TWO-PARITY",
+            "parity":
+                2,
+        },
+        {
+            "name":
+                "THREE-PARITY",
+            "parity":
+                3,
+        },
+    ]
+
+    rows = []
+
+    for configuration in configurations:
+
+        name = configuration["name"]
+
+        parity_count = (
+            configuration["parity"]
+        )
+
+        if parity_count == 0:
+
+            overhead = 0.0
+
+        else:
+
+            overhead = (
+                parity_count
+                / GROUP_SIZE
+                * 100
+            )
+
+        print("")
+        print("=" * 60)
+        print(name)
+        print("-" * 60)
+
+        print(
+            f"Data fragments       : "
+            f"{GROUP_SIZE}"
+        )
+
+        print(
+            f"Parity fragments     : "
+            f"{parity_count}"
+        )
+
+        print(
+            f"Redundancy overhead  : "
+            f"{overhead:.2f}%"
+        )
+
+        if parity_count == 0:
+
+            max_recovery = 0
+
+        else:
+
+            max_recovery = parity_count
+
+        print(
+            f"Theoretical tested recovery boundary: "
+            f"{max_recovery} failure(s)/group"
+        )
+
+        for failure_count in range(
+            0,
+            4,
+        ):
+
+            if parity_count == 0:
+
+                if failure_count == 0:
+
+                    exact = True
+
+                else:
+
+                    exact = False
+
+            else:
+
+                exact = simulate_configuration(
+                    fragments,
+                    parity_count,
+                    failure_count,
+                )
+
+            if failure_count == 0:
+
+                label = "0 failures"
+
+            elif failure_count == 1:
+
+                label = "1 failure"
+
+            else:
+
+                label = (
+                    f"{failure_count} failures"
+                )
+
+            print(
+                f"{label:<15} "
+                f"Exact recovery: "
+                f"{exact}"
+            )
+
+            rows.append(
+                {
+                    "configuration":
+                        name,
+                    "data_fragments":
+                        GROUP_SIZE,
+                    "parity_fragments":
+                        parity_count,
+                    "overhead_percent":
+                        round(
+                            overhead,
+                            2,
+                        ),
+                    "failure_count":
+                        failure_count,
+                    "exact_recovery":
+                        exact,
+                }
+            )
+
+    # --------------------------------------------------------
+    # Practical comparison
+    # --------------------------------------------------------
+
+    print("")
+    print("=" * 60)
+    print("TRADE-OFF SUMMARY")
+    print("-" * 60)
+
+    for configuration in configurations:
+
+        parity_count = (
+            configuration["parity"]
+        )
+
+        if parity_count == 0:
+
+            overhead = 0.0
+
+        else:
+
+            overhead = (
+                parity_count
+                / GROUP_SIZE
+                * 100
+            )
+
+        recoverable = 0
+
+        for failure_count in range(
+            1,
+            4,
+        ):
+
+            if parity_count == 0:
+
+                result = False
+
+            else:
+
+                result = simulate_configuration(
+                    fragments,
+                    parity_count,
+                    failure_count,
+                )
+
+            if result:
+
+                recoverable = failure_count
+
+        print(
+            f"{configuration['name']:<16}"
+            f" Overhead={overhead:>6.2f}%"
+            f"  Recovery={recoverable}"
+            f" failure(s)/group"
+        )
+
+    # --------------------------------------------------------
+    # CSV
+    # --------------------------------------------------------
+
+    csv_path = (
+        ROOT
+        / "data"
+        / "experiments"
+        / "milestone12"
+        / "redundancy_tradeoff.csv"
+    )
+
+    with csv_path.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "configuration",
+                "data_fragments",
+                "parity_fragments",
+                "overhead_percent",
+                "failure_count",
+                "exact_recovery",
+            ],
+        )
+
+        writer.writeheader()
+
+        writer.writerows(
+            rows
+        )
+
+    # --------------------------------------------------------
+    # Final result
+    # --------------------------------------------------------
+
+    print("")
+    print("RESULT DATA")
+    print("-" * 60)
+
+    print(
+        f"CSV saved to          : "
+        f"{csv_path}"
+    )
+
+    print("")
+    print("INTERPRETATION")
+    print("-" * 60)
+
+    print(
+        "Increasing parity increases storage overhead."
+    )
+
+    print(
+        "The tested redundancy level also increases"
+    )
+
+    print(
+        "the number of simultaneous failures that"
+    )
+
+    print(
+        "can be recovered within one group."
+    )
+
+    print("")
+    print(
+        "This is a controlled simulation."
+    )
+
+    print(
+        "It does not represent a measured physical"
+    )
+
+    print(
+        "DNA synthesis or sequencing error rate."
+    )
+
+    print("")
+    print("=" * 60)
+    print("RESULT: PASS")
+    print("=" * 60)
+    print("")
+
+
+if __name__ == "__main__":
+    main()

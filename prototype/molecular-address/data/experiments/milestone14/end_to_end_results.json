@@ -1,0 +1,48 @@
+{
+  "milestone": 14,
+  "name": "End-to-End Molecular Archive Lifecycle",
+  "dataset": {
+    "bytes": 10240,
+    "fragments": 40,
+    "fragment_size": 256,
+    "original_sha256": "dca673b55b89498117291a6fadf8a10f1230d4f0dc63bfd35cb1a55e7460d0fc"
+  },
+  "identity": {
+    "file_id": "FILE_002",
+    "generation_id": "GEN-000001",
+    "unique_identity_keys": 40
+  },
+  "dna": {
+    "dna_alphabet_valid": true,
+    "archive_fragments": 40
+  },
+  "integrity": {
+    "valid_fragments": 39,
+    "invalid_fragments": 1,
+    "corruption_detected": true
+  },
+  "recovery": {
+    "single_failure_exact": true,
+    "three_failure_exact": true,
+    "full_file_exact": true
+  },
+  "verification": {
+    "digital_source_created": true,
+    "fragmentation": true,
+    "generation_identity": true,
+    "molecular_address_uniqueness": true,
+    "dna_encoding": true,
+    "mixed_archive": true,
+    "selective_retrieval": true,
+    "baseline_exact_reconstruction": true,
+    "integrity_detection": true,
+    "single_fragment_recovery": true,
+    "three_fragment_recovery": true,
+    "full_file_recovery": true,
+    "final_sha256_match": true
+  },
+  "passed_checks": 13,
+  "total_checks": 13,
+  "result": "PASS",
+  "limitation": "This is a controlled digital simulation of an end-to-end molecular archive architecture. It does not claim physical DNA synthesis, storage, sequencing, or measured physical DNA error rates."
+}

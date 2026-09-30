@@ -1,0 +1,8 @@
+test,target_ids,mode,recovery_possible,recovered_fragments,recovery_exact,expected_recovery,test_pass
+T1 - TWO MISSING SAME GROUP,"0,1",missing,True,2,True,True,True
+T2 - TWO CORRUPTED SAME GROUP,"4,5",corruption,True,2,True,True,True
+T3 - MISSING + CORRUPTED SAME GROUP,"8,9",mixed,True,2,True,True,True
+T4 - THREE MISSING SAME GROUP,"12,13,14",missing,False,0,False,False,True
+T5 - TWO MISSING DIFFERENT GROUPS,"16,20",missing,True,2,True,True,True
+T6 - TWO CORRUPTED DIFFERENT GROUPS,"24,28",corruption,True,2,True,True,True
+T7 - MIXED DIFFERENT GROUPS,"32,36",mixed,True,2,True,True,True

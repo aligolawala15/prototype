@@ -1,0 +1,11 @@
+experiment,address,baseline_exact,recovery_success,final_exact
+missing,FILE_002-FRAG-000002,False,True,True
+missing,FILE_002-FRAG-000010,False,True,True
+missing,FILE_002-FRAG-000018,False,True,True
+missing,FILE_002-FRAG-000026,False,True,True
+missing,FILE_002-FRAG-000034,False,True,True
+corruption,FILE_002-FRAG-000005,False,True,True
+corruption,FILE_002-FRAG-000013,False,True,True
+corruption,FILE_002-FRAG-000021,False,True,True
+corruption,FILE_002-FRAG-000029,False,True,True
+corruption,FILE_002-FRAG-000037,False,True,True

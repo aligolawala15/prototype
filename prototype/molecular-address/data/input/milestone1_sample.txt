@@ -1,0 +1,11 @@
+﻿MOLECULAR ADDRESS - MILESTONE 1
+DNA storage computational prototype.
+
+This file is used only to verify that our DNA encoding and decoding
+pipeline can preserve the original digital data exactly.
+
+The current mapping is:
+00 = A
+01 = C
+10 = G
+11 = T

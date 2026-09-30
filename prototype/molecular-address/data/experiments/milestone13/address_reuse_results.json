@@ -1,0 +1,43 @@
+{
+  "milestone": 13,
+  "title": "Address Reuse + Generation Identity",
+  "reused_address": "ADDR-000001",
+  "archive_entries": 3,
+  "address_only_matches": 3,
+  "tests_total": 8,
+  "tests_passed": 8,
+  "tests": {
+    "address_reuse_detected": true,
+    "address_only_is_ambiguous": true,
+    "generation_separation": true,
+    "identical_payload_identity_separation": true,
+    "full_identity_uniqueness": true,
+    "selective_generation_retrieval": true,
+    "versioned_record_complete": true,
+    "address_reuse_requires_generation": true
+  },
+  "identities": [
+    {
+      "file_id": "FILE_A",
+      "generation": 1,
+      "address": "ADDR-000001",
+      "payload_hash": "1a10b163737fa2f81f25560b4ccb2e180aeb1506987248d7b17e335397086393",
+      "identity_key": "FILE_A:GEN-000001:ADDR-000001"
+    },
+    {
+      "file_id": "FILE_A",
+      "generation": 2,
+      "address": "ADDR-000001",
+      "payload_hash": "b8423a5dc64e8faddc2fca97b13c71967ad9f4bba0a58cc560dcc6b683079be4",
+      "identity_key": "FILE_A:GEN-000002:ADDR-000001"
+    },
+    {
+      "file_id": "FILE_A",
+      "generation": 3,
+      "address": "ADDR-000001",
+      "payload_hash": "1a10b163737fa2f81f25560b4ccb2e180aeb1506987248d7b17e335397086393",
+      "identity_key": "FILE_A:GEN-000003:ADDR-000001"
+    }
+  ],
+  "limitation": "This milestone validates logical identity and address reuse in a digital simulation. It does not establish physical DNA molecule identity, synthesis stability, or sequencing behavior."
+}

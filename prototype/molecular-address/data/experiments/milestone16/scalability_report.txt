@@ -1,0 +1,13 @@
+MILESTONE 16
+SCALABILITY + STRESS VALIDATION
+
+Dataset sizes: [100, 250, 500, 1024] KB
+Fragment size: 256 bytes
+Parity configurations: [0, 1, 2, 3]
+
+Total cases: 16
+Checks passed: 6/6
+Overall PASS: True
+
+IMPORTANT LIMITATION
+This experiment validates the digital architecture under increased dataset and fragment counts. It does not demonstrate physical DNA synthesis, molecular storage, sequencing, or physical DNA error-rate performance.

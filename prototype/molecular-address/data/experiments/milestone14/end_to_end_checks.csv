@@ -1,0 +1,14 @@
+Check,Result
+digital_source_created,PASS
+fragmentation,PASS
+generation_identity,PASS
+molecular_address_uniqueness,PASS
+dna_encoding,PASS
+mixed_archive,PASS
+selective_retrieval,PASS
+baseline_exact_reconstruction,PASS
+integrity_detection,PASS
+single_fragment_recovery,PASS
+three_fragment_recovery,PASS
+full_file_recovery,PASS
+final_sha256_match,PASS

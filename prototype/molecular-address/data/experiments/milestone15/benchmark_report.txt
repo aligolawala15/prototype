@@ -1,0 +1,20 @@
+MOLECULAR ADDRESS - MILESTONE 15
+EXPERIMENTAL BENCHMARK + EVIDENCE PACK
+
+Dataset sizes: 10 KB, 40 KB, 100 KB
+Fragment size: 256 bytes
+
+PARITY / OVERHEAD / RECOVERY
+------------------------------------------------------------
+Parity 0: 0.00% overhead | 0 failure(s)/group tested
+Parity 1: 25.00% overhead | 1 failure(s)/group tested
+Parity 2: 50.00% overhead | 2 failure(s)/group tested
+Parity 3: 75.00% overhead | 3 failure(s)/group tested
+
+Benchmark tests: 12/12 passed
+Reproducibility: PASS
+Overall: PASS
+
+LIMITATION
+This is a controlled digital benchmark.
+It does not represent measured physical DNA storage or sequencing performance.

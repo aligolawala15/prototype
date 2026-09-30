@@ -1,0 +1,29 @@
+error_type,requested_rate,affected_fragments,affected_bases,deleted_fragments,expected_fragments,retrieved_fragments,reconstructed_bytes,original_bytes,retrieval_complete,exact_reconstruction,decoding_error
+substitution,0.0,0,0,0,40,40,10240,10240,True,True,
+substitution,0.0001,6,6,0,40,40,10240,10240,True,False,
+substitution,0.0005,12,15,0,40,40,10240,10240,True,False,
+substitution,0.001,28,38,0,40,40,10240,10240,True,False,
+substitution,0.0025,38,94,0,40,40,10240,10240,True,False,
+substitution,0.005,40,218,0,40,40,10240,10240,True,False,
+substitution,0.01,40,421,0,40,40,10240,10240,True,False,
+insertion,0.0,0,0,0,40,40,10240,10240,True,True,
+insertion,0.0001,5,5,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+insertion,0.0005,12,15,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+insertion,0.001,27,38,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+insertion,0.0025,37,96,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+insertion,0.005,40,219,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+insertion,0.01,40,427,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+deletion,0.0,0,0,0,40,40,10240,10240,True,True,
+deletion,0.0001,7,7,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+deletion,0.0005,13,16,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+deletion,0.001,28,45,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+deletion,0.0025,33,98,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+deletion,0.005,39,208,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+deletion,0.01,40,418,0,40,40,0,10240,True,False,ValueError: Bit string length must be divisible by 8.
+missing_fragment,0.0,0,0,0,40,40,10240,10240,True,True,
+missing_fragment,0.02,1,0,1,40,39,9984,10240,False,False,
+missing_fragment,0.05,4,0,4,40,36,9216,10240,False,False,
+missing_fragment,0.1,7,0,7,40,33,8448,10240,False,False,
+missing_fragment,0.15,7,0,7,40,33,8448,10240,False,False,
+missing_fragment,0.2,9,0,9,40,31,7936,10240,False,False,
+missing_fragment,0.25,12,0,12,40,28,7168,10240,False,False,
